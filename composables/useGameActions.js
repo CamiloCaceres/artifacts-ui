@@ -1,25 +1,38 @@
-// composables/useGameActions.js
 import { ref } from 'vue'
 import { useGameAuth } from '~/stores/gameAuth'
 import { storeToRefs } from 'pinia'
 import { useCharacterStore } from '~/stores/character'
+import { useCooldownStore } from '~/stores/cooldown'
 
 export const useGameActions = () => {
   const gameAuth = useGameAuth()
   const characterStore = useCharacterStore()
+  const cooldownStore = useCooldownStore()
   const { token, characterName, serverUrl } = storeToRefs(gameAuth)
   
   const loading = ref(false)
   const error = ref(null)
 
-  // Base configuration for API requests
-  const getBaseConfig = () => ({
+   // Base configuration for API requests
+   const getBaseConfig = () => ({
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       'Authorization': `Bearer ${token.value}`
     }
   })
+
+  // Handle cooldown directly instead of using useCooldown
+  const handleCooldown = async (cooldown) => {
+    if (!cooldown) return
+    cooldownStore.setCooldown({
+      expiration: cooldown.expiration,
+      total_seconds: cooldown.remaining_seconds
+    })
+    await new Promise((resolve) => 
+      setTimeout(resolve, (cooldown.remaining_seconds + 1) * 1000)
+    )
+  }
 
   // Utility function to handle API calls and cooldowns
   const makeRequest = async (url, options) => {
@@ -38,13 +51,17 @@ export const useGameActions = () => {
       
       const result = await response.json()
       characterStore.updateCharacter(result.data.character)
-      console.log(result)
+      
       if (!result.data) {
         throw new Error('No data received from server')
       }
 
-      // Handle cooldown
-      if (result.data.cooldown?.remaining_seconds) {
+      // Handle cooldown with new store
+      if (result.data.cooldown) {
+        cooldownStore.setCooldown({
+          expiration: result.data.cooldown.expiration,
+          total_seconds: result.data.cooldown.remaining_seconds
+        })
         await new Promise((resolve) => 
           setTimeout(resolve, (result.data.cooldown.remaining_seconds + 1) * 1000)
         )
@@ -53,11 +70,9 @@ export const useGameActions = () => {
       return result.data
     } catch (err) {
       error.value = err.message
-      // If unauthorized, clear credentials
       if (err.message.includes('401')) {
         gameAuth.clearCredentials()
       }
-      // Wait 5 seconds before allowing next action
       await new Promise((resolve) => setTimeout(resolve, 5000))
       throw err
     } finally {
