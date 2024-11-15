@@ -1,50 +1,6 @@
 // composables/useGameBot.ts
 import { ref, onUnmounted } from 'vue'
-
-// Types
-export interface Character {
-    name: string
-    hp: number
-    max_hp: number
-    x: number
-    y: number
-    inventory: InventorySlot[]
-}
-
-export interface InventorySlot {
-    code: string | null
-    quantity: number
-}
-
-export interface Item {
-    code: string
-    quantity: number
-}
-
-export interface Position {
-    x: number
-    y: number
-}
-
-export interface BotConfig {
-    apiToken: string
-    characterName: string
-    actionType: 'fight' | 'gather'
-    resource?: string
-    baseUrl?: string
-}
-
-export interface BotStatus {
-    isRunning: boolean
-    lastAction: string
-    totalActions: number
-    totalXp: number
-    totalGold: number
-    itemsCollected: Map<string, number>
-    currentHp?: number
-    maxHp?: number
-    lastError?: string
-}
+import type { BotConfig, BotStatus, Character, Position } from '~/types/bot'
 
 export const useGameBot = (config: BotConfig) => {
     const status = ref<BotStatus>({
@@ -59,7 +15,7 @@ export const useGameBot = (config: BotConfig) => {
     const currentCooldown = ref<string | null>(null)
     let stopRequested = false
 
-    // Remove axios instance creation and replace with fetch options
+
     const fetchOptions = {
         baseURL: config.baseUrl || 'https://api.artifactsmmo.com',
         headers: {

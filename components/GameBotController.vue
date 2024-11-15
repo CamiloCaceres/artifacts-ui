@@ -55,7 +55,7 @@
   </template>
   
   <script setup lang="ts">
-  import type { BotConfig } from '~/composables/useGameBot'
+  import type { BotConfig } from '~/types/bot'
   import { useGameBot } from '~/composables/useGameBot'
 
 
