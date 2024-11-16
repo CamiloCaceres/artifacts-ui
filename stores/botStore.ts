@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, onUnmounted } from 'vue'
 import type { BotConfig, BotStatus, Position } from '~/types/bot'
+import { useLogStore } from './logStore'
 
 // Enhanced type definitions
 interface WorkerMessage {
@@ -10,7 +11,9 @@ interface WorkerMessage {
 
 interface WorkerResponse {
   type: 'status' | 'log' | 'error'
-  data: BotStatus | string
+  data: Partial<BotStatus> | string
+  logType?: 'info' | 'error' | 'success' | 'warning'
+  details?: any
 }
 
 interface BotWorkerInstance {
@@ -40,6 +43,9 @@ export const RESOURCE_POSITIONS: Record<ResourceType, Position> = {
 }
 
 export const useBotStore = defineStore('bots', () => {
+  // Add logStore instance
+  const logStore = useLogStore()
+  
   // Store state
   const workers = ref<Map<string, BotWorkerInstance>>(new Map())
   const botsStatus = ref<Map<string, BotStatus>>(new Map())
@@ -72,6 +78,7 @@ export const useBotStore = defineStore('bots', () => {
       const existing = workers.value.get(config.characterName)
       if (existing) {
         existing.worker.terminate()
+        logStore.addLog(config.characterName, 'Terminated existing worker', 'warning')
       }
 
       // Create new worker
@@ -82,7 +89,7 @@ export const useBotStore = defineStore('bots', () => {
 
       // Set up message handling with type safety
       worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
-        const { type, data } = e.data
+        const { type, data, logType, details } = e.data
         
         switch (type) {
           case 'status':
@@ -92,24 +99,43 @@ export const useBotStore = defineStore('bots', () => {
             break
             
           case 'log':
-            console.log(`[${config.characterName}] ${data}`)
-            updateBotStatus(config.characterName, {
-              lastAction: typeof data === 'string' ? data : 'Unknown action'
-            })
+            if (typeof data === 'string') {
+              logStore.addLog(
+                config.characterName,
+                data,
+                logType || 'info',
+                details
+              )
+              updateBotStatus(config.characterName, { lastAction: data })
+            }
             break
             
           case 'error':
-            console.error(`[${config.characterName}] ${data}`)
-            updateBotStatus(config.characterName, {
-              lastError: typeof data === 'string' ? data : 'Unknown error'
-            })
+            if (typeof data === 'string') {
+              logStore.addLog(
+                config.characterName,
+                data,
+                'error',
+                details
+              )
+              updateBotStatus(config.characterName, { lastError: data })
+            }
             break
         }
       }
 
       // Handle worker errors
       worker.onerror = (error) => {
-        console.error(`Worker error for ${config.characterName}:`, error)
+        logStore.addLog(
+          config.characterName,
+          `Worker error: ${error.message}`,
+          'error',
+          {
+            filename: error.filename,
+            lineno: error.lineno,
+            colno: error.colno
+          }
+        )
         updateBotStatus(config.characterName, {
           isRunning: false,
           lastError: error.message
@@ -126,8 +152,15 @@ export const useBotStore = defineStore('bots', () => {
       // Initialize status in store
       botsStatus.value.set(config.characterName, createDefaultStatus())
 
+      logStore.addLog(config.characterName, 'Bot initialized successfully', 'success', {
+        config: { ...config, apiToken: '***' }
+      })
+
     } catch (error) {
-      console.error(`Failed to initialize bot ${config.characterName}:`, error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      logStore.addLog(config.characterName, `Initialization failed: ${errorMessage}`, 'error', {
+        error: error instanceof Error ? error.stack : error
+      })
       throw error
     }
   }
@@ -137,7 +170,7 @@ export const useBotStore = defineStore('bots', () => {
     const instance = workers.value.get(characterName)
     
     if (!instance) {
-      console.error(`No worker found for ${characterName}`)
+      logStore.addLog(characterName, 'No worker found', 'error')
       return
     }
 
@@ -172,7 +205,7 @@ export const useBotStore = defineStore('bots', () => {
     const instance = workers.value.get(characterName)
     
     if (!instance) {
-      console.error(`No worker found for ${characterName}`)
+      logStore.addLog(characterName, 'No worker found', 'error')
       return
     }
 

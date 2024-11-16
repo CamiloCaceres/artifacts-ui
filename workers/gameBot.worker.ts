@@ -6,9 +6,12 @@ interface WorkerMessage {
   data?: BotConfig
 }
 
+// Update WorkerResponse interface to include log types and details
 interface WorkerResponse {
   type: 'status' | 'log' | 'error'
   data: Partial<BotStatus> | string
+  logType?: 'info' | 'error' | 'success' | 'warning'
+  details?: any
 }
 
 // API response types
@@ -87,7 +90,7 @@ class GameBot {
         return parseFloat(secondsMatch[1]) * 1000; // Convert to milliseconds
       }
     } catch (e) {
-      this.log('Failed to parse cooldown time');
+      this.emitError('Failed to parse cooldown time');
     }
     return null;
   }
@@ -95,7 +98,9 @@ class GameBot {
   private async handleCooldownError(error: Error): Promise<void> {
     const cooldownMs = this.parseCooldownTime(error);
     if (cooldownMs) {
-      this.log(`Waiting for cooldown: ${(cooldownMs / 1000).toFixed(1)} seconds`);
+      this.emitLog(`Waiting for cooldown: ${(cooldownMs / 1000).toFixed(1)} seconds`, 'info', {
+        cooldownMs
+      });
       await new Promise(resolve => setTimeout(resolve, cooldownMs + 500)); // Add 500ms buffer
       return;
     }
@@ -143,7 +148,11 @@ class GameBot {
         throw new Error(`Failed after ${this.MAX_RETRIES} retries: ${error}`)
       }
       
-      this.log(`Request failed, retrying in ${this.RETRY_DELAY / 1000}s...`)
+      this.emitLog(`Request failed, retrying in ${this.RETRY_DELAY / 1000}s...`, 'warning', {
+        retryCount: this.retryCount,
+        maxRetries: this.MAX_RETRIES,
+        retryDelay: this.RETRY_DELAY
+      });
       await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY))
       return this.request<T>(endpoint, options)
     }
@@ -173,30 +182,25 @@ class GameBot {
     self.postMessage(message)
   }
 
-  private log(message: string) {
-    const logMessage: WorkerResponse = {
+  // Add new logging methods
+  private emitLog(message: string, logType: WorkerResponse['logType'] = 'info', details?: any) {
+    const response: WorkerResponse = {
       type: 'log',
-      data: message
+      data: message,
+      logType,
+      details
     }
-    self.postMessage(logMessage)
-    
-    // Update last action in status
-    this.postStatus({
-      lastAction: message
-    })
+    self.postMessage(response)
   }
 
-  private error(message: string) {
-    const errorMessage: WorkerResponse = {
+  private emitError(message: string, details?: any) {
+    const response: WorkerResponse = {
       type: 'error',
-      data: message
+      data: message,
+      logType: 'error',
+      details
     }
-    self.postMessage(errorMessage)
-    
-    // Update error in status
-    this.postStatus({
-      lastError: message
-    })
+    self.postMessage(response)
   }
 
   private async handleCooldown(cooldown?: { expiration: string }) {
@@ -207,7 +211,9 @@ class GameBot {
     const waitMs = expiration.getTime() - currentTime.getTime()
 
     if (waitMs > 0) {
-      this.log(`Waiting for cooldown: ${(waitMs / 1000).toFixed(1)} seconds`)
+      this.emitLog(`Waiting for cooldown: ${(waitMs / 1000).toFixed(1)} seconds`, 'info', {
+        waitMs
+      })
       await new Promise(resolve => setTimeout(resolve, waitMs + 500))
     }
   }
@@ -219,7 +225,10 @@ class GameBot {
 
     try {
       await this.post(`/my/${this.config.characterName}/action/move`, targetPos)
-      this.log(`Moved to ${targetPos.x}, ${targetPos.y}`)
+      this.emitLog(`Moved to ${targetPos.x}, ${targetPos.y}`, 'info', { 
+        from: { x: character.x, y: character.y },
+        to: targetPos 
+      })
       return true
     } catch (error) {
       if (error instanceof Error) {
@@ -252,7 +261,9 @@ class GameBot {
 
     for (const item of items) {
       await this.post(`/my/${this.config.characterName}/action/bank/deposit`, item)
-      this.log(`Deposited ${item.quantity}x ${item.code}`)
+      this.emitLog(`Deposited ${item.quantity}x ${item.code}`, 'info', {
+        item
+      })
       await new Promise(resolve => setTimeout(resolve, 500))
     }
   }
@@ -268,14 +279,22 @@ class GameBot {
     await this.move(targetPos, character)
   }
 
+  // Update rest method with enhanced logging
   private async rest(character: Character): Promise<void> {
     const hpPercent = (character.hp / character.max_hp) * 100
     const needsRest = (this.config.actionType === 'fight' && hpPercent < 50) ||
                      (this.config.actionType === 'gather' && hpPercent < 30)
 
     if (needsRest) {
+      this.emitLog(`Low HP (${hpPercent.toFixed(1)}%), resting...`, 'warning', {
+        currentHp: character.hp,
+        maxHp: character.max_hp,
+        hpPercent
+      })
       const restData = await this.post<ActionResponse>(`/my/${this.config.characterName}/action/rest`, {})
-      this.log(`Rested and recovered ${restData.data?.hp_restored} HP`)
+      this.emitLog(`Rested and recovered ${restData.data?.hp_restored} HP`, 'success', {
+        hpRestored: restData.data?.hp_restored
+      })
     }
   }
 
@@ -286,32 +305,60 @@ class GameBot {
         `/my/${this.config.characterName}/action/${endpoint}`,
         {}
       )
-
+  
       const responseData = actionData.data
       const xpGained = responseData?.fight?.xp || responseData?.details?.xp || 0
       const goldGained = responseData?.fight?.gold || 0
-
+  
+      // Update status
       this.postStatus({
         totalActions: (this.lastStatus.totalActions || 0) + 1,
         totalXp: (this.lastStatus.totalXp || 0) + xpGained,
         totalGold: (this.lastStatus.totalGold || 0) + goldGained,
       })
-
-      // Handle cooldown from successful action
+  
+      // Log the action with more detail
+      if (this.config.actionType === 'fight') {
+        this.emitLog(
+          `Combat completed: +${xpGained}XP, +${goldGained} gold`,
+          'success',
+          {
+            type: 'fight',
+            xpGained,
+            goldGained,
+            totalXp: (this.lastStatus.totalXp || 0) + xpGained,
+            totalGold: (this.lastStatus.totalGold || 0) + goldGained,
+            totalActions: (this.lastStatus.totalActions || 0) + 1
+          }
+        )
+      } else {
+        this.emitLog(
+          `Gathered ${this.config.resource}: +${xpGained}XP`,
+          'success',
+          {
+            type: 'gather',
+            resource: this.config.resource,
+            xpGained,
+            totalXp: (this.lastStatus.totalXp || 0) + xpGained,
+            totalActions: (this.lastStatus.totalActions || 0) + 1
+          }
+        )
+      }
+  
+      // Handle cooldown after action
       await this.handleCooldown(responseData.cooldown)
     } catch (error) {
       if (error instanceof Error && error.message.includes('code":499')) {
         await this.handleCooldownError(error);
-        // Don't count this as a retry, just wait for cooldown
         this.retryCount = 0;
       } else {
-        throw error; // Propagate other errors to main error handler
+        throw error;
       }
     }
   }
 
   public async run(): Promise<void> {
-    this.log(`Starting bot for ${this.config.characterName}`)
+    this.emitLog(`Starting bot for ${this.config.characterName}`, 'info')
     this.stopRequested = false
     this.retryCount = 0
 
@@ -337,7 +384,7 @@ class GameBot {
         // Check inventory
         const inventoryTotal = character.inventory.reduce((total, slot) => total + slot.quantity, 0)
         if (inventoryTotal >= this.INVENTORY_LIMIT) {
-          this.log('Inventory full, depositing items...')
+          this.emitLog('Inventory full, depositing items...', 'info')
           await this.moveToBank(character)
           await this.depositItems(character.inventory)
           continue
@@ -354,18 +401,18 @@ class GameBot {
       } catch (error) {
         // Only log non-cooldown errors
         if (!(error instanceof Error && error.message.includes('code":499'))) {
-          this.error(error instanceof Error ? error.message : 'Unknown error occurred')
+          this.emitError(error instanceof Error ? error.message : 'Unknown error occurred')
           await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY))
         }
       }
     }
 
-    this.log(`Bot stopped for ${this.config.characterName}`)
+    this.emitLog(`Bot stopped for ${this.config.characterName}`, 'info')
   }
 
   public stop(): void {
     this.stopRequested = true
-    this.log('Stop requested, completing current action...')
+    this.emitLog('Stop requested, completing current action...', 'info')
   }
 }
 
@@ -380,10 +427,16 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
       if (data) {
         bot = new GameBot(data)
         bot.run().catch(error => {
-          self.postMessage({
+          const response: WorkerResponse = {
             type: 'error',
-            data: `Fatal error: ${error.message}`
-          })
+            data: `Fatal error: ${error.message}`,
+            logType: 'error',
+            details: {
+              error: error instanceof Error ? error.message : 'Unknown error',
+              stack: error instanceof Error ? error.stack : undefined
+            }
+          }
+          self.postMessage(response)
         })
       }
       break
