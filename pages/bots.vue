@@ -85,10 +85,13 @@
         >
           <p>{{ bot.characterName }}</p>
           <UFormGroup label="Action Type" class="col-span-2">
-            <UInput v-model="bot.actionType" placeholder="Action Type" />
+            <USelect v-model="bot.actionType" :options="['fight', 'gather']" />
           </UFormGroup>
           <UFormGroup label="Resource" class="col-span-2">
-            <UInput v-model="bot.resource" placeholder="Resource (optional)" />
+            <USelect             
+              v-model="bot.resource"
+              :options="Object.keys(RESOURCE_POSITIONS)"
+            />
           </UFormGroup>
         </div>
         <UButton
@@ -233,6 +236,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import type { BotConfig } from "~/types/bot";
 import { useBotStore } from "~/stores/botStore";
 import { storeToRefs } from "pinia";
+import { RESOURCE_POSITIONS } from "~/utils/constants";
 
 const botStore = useBotStore();
 const { botsStatus } = storeToRefs(botStore);
